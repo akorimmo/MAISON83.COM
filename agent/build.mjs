@@ -35,15 +35,17 @@ if (!horsLigne) {
     const tous = await recupererAnnonces({ types: site.agent.types, log });
     const biens = tous.filter(site.agent.filtre);
     log(`Agent : ${biens.length} bien(s) retenu(s) pour ${site.domaine} sur ${tous.length} récupéré(s).`);
-    if (!tous.length && precedent.biens.length) {
-      log('Agent : aucune annonce reçue (site injoignable ou modifié ?) — on garde les annonces précédentes.');
-    } else {
-      donnees = { maj: new Date().toISOString(), source: 'https://akorimmo.com', biens };
-      await fs.mkdir(path.dirname(DATA), { recursive: true });
-      await fs.writeFile(DATA, JSON.stringify(donnees, null, 1));
-    }
+    if (!tous.length) throw new Error('aucune annonce reçue (site injoignable ou modifié ?)');
+    donnees = { maj: new Date().toISOString(), source: 'https://akorimmo.com', biens };
+    await fs.mkdir(path.dirname(DATA), { recursive: true });
+    await fs.writeFile(DATA, JSON.stringify(donnees, null, 1));
   } catch (e) {
-    log(`Agent : échec (${e.message}) — construction avec les dernières annonces enregistrées.`);
+    // Pas de repli sur d'anciennes annonces : la construction échoue et Netlify
+    // garde en ligne la dernière version correcte du site.
+    log(`Agent : échec (${e.message}).`);
+    log('Construction arrêtée : rien n\'est publié, la version actuellement en ligne est conservée.');
+    log('(Pour reconstruire malgré tout avec les annonces enregistrées : node agent/build.mjs --hors-ligne)');
+    process.exit(1);
   }
 }
 
