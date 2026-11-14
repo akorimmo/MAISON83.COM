@@ -118,7 +118,7 @@ function pied(site, compact = false) {
   if (compact) {
     return `<footer class="pied pied-compact"><div class="conteneur">${autresSites(site)}</div><div class="conteneur pied-bas">
     <span class="pied-agences">${AGENCE.agences.map((a) => `<span>${AGENCE.nom} ${esc(a.nom.replace('Agence ', ''))} · ${esc(a.rue)} – ${a.cp} ${a.ville} · <a href="${tel(a.tel)}">${a.tel}</a> · <a href="mailto:${a.mail}">${a.mail}</a></span>`).join('')}</span>
-    <span><a href="${AGENCE.mentions}" rel="noopener">Mentions légales</a> · <a href="${AGENCE.honoraires}" rel="noopener">Barème d’honoraires</a></span>
+    <span><a href="${AGENCE.mentions}" rel="noopener">Mentions légales</a> · <a href="${AGENCE.honoraires}" rel="noopener">Barème d’honoraires</a> · Annonces mises à jour le ${esc(site.majTexte)}</span>
   </div></footer>`;
   }
   return `<footer class="pied">
