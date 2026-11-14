@@ -36,6 +36,14 @@ export function decode(s = '') {
 export const stripTags = (s = '') => decode(String(s).replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Rythme « poli » vis-à-vis d'akorimmo.com : une seule requête à la fois,
+// une pause entre deux requêtes, et une durée maximale pour finir avant la
+// limite de temps de Netlify.
+const PAUSE_MS = 700;                    // pause minimale entre deux requêtes (+ 0 à 300 ms)
+const DELAI_MAX_MS = 20000;              // délai maximal d'attente d'une réponse
+const ATTENTES_ESSAIS_MS = [3000, 10000, 30000]; // attentes avant chaque nouvel essai
+const DUREE_MAX_MS = 11 * 60 * 1000;     // au-delà : abandon (Netlify coupe vers 15 min)
+
 // ------------------------------------------------------------ analyse du HTML
 /** Lit le préfixe du formulaire de recherche et les valeurs des types de biens. */
 export function parseSearchForm(html) {
@@ -142,29 +150,40 @@ export function parseDetail(html, url) {
 
 // ------------------------------------------------------------- accès réseau
 class Session {
-  constructor() { this.cookies = new Map(); }
+  constructor() { this.cookies = new Map(); this.dernier = 0; this.debut = Date.now(); }
   header() { return [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; '); }
   store(res) {
     const list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [res.headers.get('set-cookie')].filter(Boolean);
     for (const c of list) { const [kv] = c.split(';'); const i = kv.indexOf('='); if (i > 0) this.cookies.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim()); }
   }
-  async fetch(url, opts = {}, tries = 3) {
+  async tour() {
+    const attente = this.dernier + PAUSE_MS + Math.random() * 300 - Date.now();
+    if (attente > 0) await sleep(attente);
+    this.dernier = Date.now();
+  }
+  async fetch(url, opts = {}, tries = 1 + ATTENTES_ESSAIS_MS.length) {
     for (let t = 1; ; t++) {
+      if (Date.now() - this.debut > DUREE_MAX_MS) throw new Error('durée maximale dépassée');
+      await this.tour();
       try {
         const res = await fetch(new URL(url, BASE), {
           ...opts,
           redirect: 'manual',
+          signal: AbortSignal.timeout(DELAI_MAX_MS),
           headers: { 'user-agent': UA, 'accept-language': 'fr-FR,fr;q=0.9', cookie: this.header(), ...(opts.headers || {}) },
         });
         this.store(res);
         if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
           return this.fetch(new URL(res.headers.get('location'), BASE).href, {}, tries);
         }
+        if (res.status === 404 || res.status === 410) {
+          const e = new Error(`HTTP ${res.status} sur ${url}`); e.absent = true; throw e;
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status} sur ${url}`);
         return await res.text();
       } catch (e) {
-        if (t >= tries) throw e;
-        await sleep(800 * t);
+        if (e.absent || t >= tries) throw e;
+        await sleep(ATTENTES_ESSAIS_MS[t - 1] ?? 30000);
       }
     }
   }
@@ -183,7 +202,7 @@ async function pool(items, n, fn) {
  * renvoie les fiches détaillées.
  * @param {{types: string[], log?: Function, maxPages?: number, concurrence?: number}} opt
  */
-export async function recupererAnnonces({ types, log = console.log, maxPages = 80, concurrence = 4 }) {
+export async function recupererAnnonces({ types, log = console.log, maxPages = 80, concurrence = 1 }) {
   const s = new Session();
   const home = await s.fetch('/fr/acheter');
   const form = parseSearchForm(home);
@@ -207,12 +226,30 @@ export async function recupererAnnonces({ types, log = console.log, maxPages = 8
   }
   log(`  ${vus.size} annonce(s) trouvée(s) pour : ${types.join(', ')}`);
 
-  const fiches = await pool([...vus.values()], concurrence, async (v) => {
+  if (!vus.size) throw new Error('aucune annonce trouvée sur akorimmo.com (site modifié ?)');
+
+  // Lecture des fiches. Si akorimmo cesse de répondre (5 échecs de suite) ou si
+  // trop de fiches manquent, on abandonne : mieux vaut garder le site actuel
+  // que publier une liste incomplète.
+  const liste = [...vus.values()];
+  let erreurs = 0, suite = 0, arret = null;
+  const fiches = await pool(liste, concurrence, async (v) => {
+    if (arret) return null;
     try {
       const d = parseDetail(await s.fetch(v.url), v.url);
+      suite = 0;
       if (!d) log(`  ! fiche illisible : ${v.url}`);
       return d;
-    } catch (e) { log(`  ! ${e.message}`); return null; }
+    } catch (e) {
+      if (e.absent) { log(`  - fiche retirée entre-temps : ${v.url}`); return null; }
+      erreurs++; suite++;
+      log(`  ! ${e.message}`);
+      if (suite >= 5 || /durée maximale/.test(e.message)) arret = e;
+      return null;
+    }
   });
+  if (arret) throw new Error(`akorimmo.com ne répond plus (${arret.message})`);
+  const tolerance = Math.max(2, Math.ceil(liste.length * 0.05));
+  if (erreurs > tolerance) throw new Error(`${erreurs} fiche(s) sur ${liste.length} n'ont pas pu être lues`);
   return fiches.filter(Boolean);
 }
