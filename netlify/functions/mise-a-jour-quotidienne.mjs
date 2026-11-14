@@ -17,5 +17,6 @@ export default async () => {
   return new Response('ok');
 };
 
-// Tous les jours à 6 h 00 (heure UTC, soit 7 h ou 8 h à Paris).
-export const config = { schedule: '0 6 * * *' };
+// Tous les jours à 5 h 50 (heure UTC, soit 6 h 50 en hiver, 7 h 50 en été à Paris). Les horaires sont décalés
+// d'un site à l'autre pour ne pas solliciter akorimmo.com par plusieurs sites à la fois.
+export const config = { schedule: '50 5 * * *' };
